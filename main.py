@@ -10,6 +10,7 @@ import re
 import json
 import asyncio
 import datetime
+from nltk.chat.eliza import eliza_chatbot
 from random_word import RandomWords
 import matplotlib
 matplotlib.use("Agg")
@@ -75,6 +76,8 @@ class BotHandler:
         return resp
 
     def send_order(self, chat_id, text, **kwargs):
+        if chat_id==0:
+            return ''
         params = {'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML'}
         method = 'sendMessage'
         resp = requests.post(self.api_url + method, params)
@@ -255,9 +258,8 @@ class DBHandler:
         else:
             sql = "UPDATE "+str(liste)+" SET "+str(thing)+" = '"+str(value)+"' WHERE "+str(cond[0])+" = '"+str(what[0])+"'"
             for x in cond:
-                if cond.index(x)==0:
-                    continue
-                sql+=' AND '+str(x)+" = '"+str(what[cond.index(x)])+"'"
+                if cond.index(x)!=0:
+                    sql+=' AND '+str(x)+" = '"+str(what[cond.index(x)])+"'"
         botdb.comm(sql, 'unable to change data for changedbinfo()')
 
     def delete_info(self, table, cond, value):
@@ -361,6 +363,8 @@ def initialize():
     global runekeeper
     global gatop
     global plotcontrol
+    global commanderlist
+    global trusted
     members = {}
     alliance = {}
     locations = {}
@@ -370,7 +374,9 @@ def initialize():
     duels = {}
     gatop = {}
     plotcontrol = {}
+    trusted = {}
     unhandled_locations = []
+    commanderlist = []
     battle = {0: {}, 1: {}}
     result = botdb.get_info('', "EVENT", '', '')
     for x in result:
@@ -382,7 +388,7 @@ def initialize():
     runekeeper['hp']=int(runekeeper['hp'])
     result = botdb.get_info('', "MEMBERS", '', '')
     for x in result:
-        members[int(x[0])] = {'ign': x[1], 'atk': x[2], 'def': x[3], 'lvl': x[4], 'id': int(x[5]), 'guild': x[6]}
+        members[int(x[0])] = {'ign': x[1], 'atk': x[2], 'def': x[3], 'lvl': x[4], 'id': int(x[5]), 'guild': x[6], 'dump': x[7]}
     result = botdb.get_info('', "LOCATIONS", '', '')
     for x in result:
         if x[1]=='%%%%%%':
@@ -414,8 +420,12 @@ def initialize():
         battle[int(x[0])][x[4]][str(x[1])] = {"result": int(x[2]), "dump": str(x[3])}
     result = botdb.get_info('', "BANLIST", '', '')
     for x in result:
-        banlist.append(str(x[0]))
+        banlist.append(int(x[0]))
     print('Banlist: '+str(banlist))
+    result = botdb.get_info('', "COMMANDERS", '', '')
+    for x in result:
+        commanderlist.append(int(x[0]))
+    print('commanderlist: '+str(commanderlist))
     result = botdb.get_info('', "OFFSET", '', '')
     for x in result:
         offset[x[0]] = int(x[1])
@@ -423,8 +433,6 @@ def initialize():
 initialize()
 
 reports = {}
-
-commanderlist = [536511250, -1001344525861, 924188734, 286258967, 913748661, -1001370689034]
 guildyay = {}
 poincomp = {}
 waitinglist = []
@@ -447,9 +455,7 @@ results = []
 nomoreqclt = {}
 yeodet = [0]
 qcltest = [True]
-importance = ['❗', '❗', '❗️']
 needtodelete = {}
-attendlist = {}
 wire_tap_message = ''
 transferdict = {}
 default_tactics = 'deerhorn'
@@ -460,14 +466,24 @@ rword = RandomWords()
 
 class LocManager:
     def age(self, excepts):
+        to_pop=[]
         for x in locations:
             if locations[x]['name'] not in excepts and locations[x]['owner']!='Golem Sentinels':
                 locations[x]['age']+=1
+                if 'life,' in locations[x]['dump']:
+                    max_age = int(locations[x]['dump'].split('life,')[1].split(' ')[0])
+                    if max_age==locations[x]['age']:
+                        ccordersbot.send_message(-1001344525861, '<b>📍'+locations[x]['name']+'</b> <code>'+x+'</code> reached the end of life. It is deleted!')
+                        to_pop.append(x)
+                        botdb.delete_info("LOCATIONS", "CODE", x)
+                        continue
                 botdb.change_info("LOCATIONS", "AGE", locations[x]['age'], "CODE", x)
+        for x in to_pop:
+            locations.pop(x)
         for x in unhandled_locations:
             if x['name'] not in excepts and x['owner']!='Golem Sentinels':
                 unhandled_locations[unhandled_locations.index(x)]['age']+=1
-                botdb.change_info("LOCATIONS", "AGE", locations[x]['age'], ["CODE", "NAME"], ["%%%%%%", x['name']])
+                botdb.change_info("LOCATIONS", "AGE", unhandled_locations[unhandled_locations.index(x)]['age'], ["CODE", "NAME"], ["%%%%%%", x['name']])
 
     def loot(self, text, **kwargs):
         to_work_with=text.split('\n')
@@ -488,6 +504,70 @@ class LocManager:
             elif 'Glory' in typee:
                 datadump.append('g,'+x.split('Glory: ')[1].split('%')[0])
         return [';'.join(datadump), text.split('Code: ')[1].split('.')[0]]
+
+    def read(self, code):
+        stuff=locations[code]['dump'].split(' ')
+        type_of_datasets = {"g": {"text": 'Glory'}, "i": {"text": 'Items'}, "c": {"text": 'Coke'}, "m": {"text": 'Magic stone'}, "s": {"text": 'Sapphire'}, "r": {"text": 'Ruby'}}
+        dict_of_burn={}
+        dict_of_now = {}
+        dict_of_loots ={}
+        attractions=False
+        for x in stuff:
+            if 'burn:' in x:
+                type_and_burn = x.replace('burn:', '').split(';')
+                for y in type_and_burn:
+                    dict_of_burn[type_of_datasets[y.split(',')[0]]['text']] = float(y.split(',')[1])
+            elif '_logged:' in x:
+                age_and_loots = x.split('_logged:')
+                age_logged = int(age_and_loots[0])
+                age_current = locations[code]['age']
+                difference_in_age = age_current-age_logged
+                loots = age_and_loots[1].split(';')
+                for y in loots:
+                    if y=='a':
+                        attractions = True
+                        continue
+                    dict_of_loots[type_of_datasets[y.split(',')[0]]['text']] = float(y.split(',')[1])
+                if dict_of_burn!={}:
+                    for z in dict_of_loots:
+                        dict_of_now[z] = round(dict_of_loots[z]-(dict_of_burn[z]*difference_in_age), 2)
+        beautyful_text = ' <code>unknown</code>'
+        if dict_of_now!={}:
+            beautyful_text=''
+            for x in dict_of_now:
+                beautyful_text+='\n └'+x+': '+(str(dict_of_now[x]) if dict_of_now[x]>0 else '0.00')+'%'
+        return [beautyful_text, dict_of_loots, attractions]
+
+    def scout(self):
+        msg_to_send_x = '🔭🗺<b>Weak locations from Last War</b>:\n\n<b>No defenders</b>:'
+        dict_of_msgs = {}
+        weak_list = {40: [], 60: [], 80: []}
+        list_of_battlecodes = [x for x in battle[1]]
+        max_battlecode = max([int(k.split('_')[2]) for k in list_of_battlecodes])
+        real_battlecode = [z for z in list_of_battlecodes if '_'+str(max_battlecode) in z][0]
+        for y in locations:
+            if locations[y]['name'] not in battle[1][real_battlecode]:
+                msg_to_send_x+='\n'+locations[y]['name']+' <code>'+y+'</code> <a href="t.me/share/url?url=/ga_atk_'+y+'">⤴️Check</a>'
+                if locations[y]['owner']!='Complex Citadel':
+                    lvl_of_loc = int(locations[y]['name'].split('.')[1])
+                    for x in weak_list:
+                        if lvl_of_loc<=x:
+                            weak_list[x].append(y)
+                            break
+        msg_to_send_x+='\n\n<b>Few defenders:</b>'
+        for a in battle[1][real_battlecode]:
+            dump_in_question = battle[1][real_battlecode][a]['dump'].split('_')
+            bunch_of_codes = [t for t in locations if locations[t]['name']==a]
+            if int(dump_in_question[2])<3:
+                msg_to_send_x+='\n'+a+' <code>'+str(bunch_of_codes)+'</code> <b>'+dump_in_question[2]+'</b>🛡'
+                if len(bunch_of_codes)!=0:
+                    if locations[bunch_of_codes[0]]['owner']!='Complex Citadel':
+                        lvl_of_loc = int(a.split('.')[1])
+                        for x in weak_list:
+                            if lvl_of_loc<=x:
+                                weak_list[x].append(bunch_of_codes[0])
+                                break
+        return [msg_to_send_x, weak_list]
 
 loc = LocManager()
 
@@ -537,6 +617,7 @@ def add_objective(name, code, owner, **kwargs):
     else:
         print('way3')
         list_of_correct_owner = [locations[x]['name'] for x in locations if locations[x]['owner']!=owner]
+        golems = [locations[x]['name'] for x in locations if locations[x]['owner']=='Golem Sentinels']
         names_of_unhandled = [x['name'] for x in unhandled_locations]
         print(list_of_correct_owner)
         if list_of_correct_owner.count(name)==1:
@@ -562,12 +643,14 @@ def add_objective(name, code, owner, **kwargs):
             #            botdb.change_info("LOCATIONS", "OWNER", owner, "CODE", x)
         elif name not in names_of_unhandled:
             print('way33')
+            if owner=='Golem Sentinels':
+                if golems.count(name)>=1:
+                    return
+                for abccu in commanderlist:
+                    ccordersbot.send_message(abccu, '<b>New 📍 found:</b> \n'+name+'\nFrom reports\n<b>Code:</b> '+code+'\n<b>Owner</b>: '+owner)
             typee = gettype(name)
             botdb.add_location(name, code, 'active', typee, '0', owner, '')
             unhandled_locations.append({'name': name, 'status': 'active', 'type': typee, 'age': 0, 'owner': owner, 'dump': ''})
-            if owner=='Golem Sentinels':
-                for abccu in commanderlist:
-                    ccordersbot.send_message(abccu, '<b>New 📍 found:</b> \n'+name+'\nFrom reports\n<b>Code:</b> '+code+'\n<b>Owner</b>: '+owner)
         elif names_of_unhandled.count(name)==1:
             print('way34')
             typee = gettype(name)
@@ -617,11 +700,11 @@ async def main():
     global guilds
     global doipinornot
     global order
-    global attendlist
     global reports
     global transferdict
     global battle
     global wire_tap_message
+    global poincomp
     new_offset = 0
     print('launching cc orders bot')
 
@@ -643,6 +726,7 @@ async def main():
             nicetime = strftime("%H:%M", gmtime())
             if nicetime == '07:00' or nicetime == '15:00' or nicetime == '23:00':
                 ccordersbot.send_message(-1001175100654, 'The Wind Is Howling')
+                poincomp={}
                 time.sleep(60)
                 #for x in duels:
                     #duels[x]['age']+=1
@@ -659,7 +743,7 @@ async def main():
                 timing[1] = time.perf_counter()
             if timing[1]+540<=time.perf_counter():
                 yeodet[0] = 0
-                threspp = ccordersbot.send_message(-1001416833350, '<b>⚔️ Battle is over! ⚔️</b> \n\nSend your battle <a href="t.me/share/url?url=/report">/report</a> to @angrymarsbot')
+                threspp = ccordersbot.send_message(-1001416833350, '<b>⚔️ Battle is over! ⚔️</b> \n\nSend your battle <a href="t.me/share/url?url=/report">/report</a> to @cwccorderbot')
                 ccordersbot.pin_chat_message(-1001416833350, int(threspp.text.split('"message_id":')[1].split(',')[0]), True)
                 timing[1]=int(time.perf_counter()+36000000)
             if timing[2]+60<=time.perf_counter():
@@ -867,6 +951,8 @@ async def update_handler(current_update):
                         resultoffset[0] = resultoffset[0]+1
                         ccordersbot.answer_inline_query(resultis, i_query_id)
                     resultis.clear()
+                if first_chat_id in banlist:
+                    return
                 clearance_two = not (clearance.guild(first_chat_id)=='' and first_chat_id not in commanderlist and sender_id not in commanderlist)
                 first_chat_text=first_chat_text.replace('@cwccorderbot', '')
                 if first_chat_id==-1001416833350 and ('/give ' in first_chat_text or first_chat_text=='/status' or first_chat_text=='/mypoints' or first_chat_text=='/top'):
@@ -927,7 +1013,7 @@ async def update_handler(current_update):
                                             #for x in spam_cleanup:
                                                 #ccordersbot.delete_message(-1001416833350, x)
                                             spam_cleanup=[]
-                                            msg_to_send = 'Well done!\n\n🔮<b>'+runekeeper['boss']+'</b> HP\n['+('-'*(20-current_hp))+'💚'+('-'*current_hp)+']\n\nWe need: <b>'+runekeeper['current']+'</b>'
+                                            msg_to_send = 'Well done!\n\n🔮<b>'+runekeeper['boss']+'</b> HP\n['+('-'*(20-current_hp))+'💚'+('-'*current_hp)+']\n\n💫Spell: <b>'+runekeeper['current']+'</b>'
                                             ccordersbot.send_message(-1001416833350, msg_to_send)
                                 else:
                                     ccordersbot.send_message(-1001416833350, '/give only 1 letter please')
@@ -975,8 +1061,8 @@ async def update_handler(current_update):
                     tag=guild_info[first_chat_id]['tag']
                     if tag!='X':
                         linke = ''
-                        if tag=='TEL':
-                            linke = 'https://t.me/joinchat/P28GjTvOU7Y2ZGRl'
+                        if tag=='SEA':
+                            linke = 'https://t.me/joinchat/F3c_zynJF_g3ZWM9'
                         elif tag=='BTW':
                             linke = 'https://t.me/joinchat/uwAWa54gPvo1ZDk1'
                         elif tag=='RK':
@@ -1100,23 +1186,34 @@ async def update_handler(current_update):
                     if len(lencheck)>=2 and old_report!=True:
                         lencheckk = lencheck[1].split(']')
                         if [k for k in guild_info if guild_info[k]['tag']==lencheckk[0]]==[]:
+                            if first_chat_id==sender_id:
+                                banlist.append(first_chat_id)
+                                botdb.comm("INSERT INTO BANLIST VALUES ('"+str(first_chat_id)+"')", "unable to insert id into banlist: "+str(first_chat_id))
+                                ccordersbot.send_message(log_channel, 'banned: <a href="tg://user?id='+str(sender_id)+'">'+str(sender_id)+'</a> #banned')
                             return
                         lencheckkk = lencheckk[1].split(' ⚔️:')
                         if len(lencheckkk)==1:
                             lencheckkk = lencheckk[1].split(' ⚔:')
                         lencheckkkk = lencheckkk[1].split(' 🛡:')
+                        lencheckkkk[0] = lencheckkkk[0].split('(')[0]
                         lencheckkkkk = lencheckkkk[1].split(' Lvl: ')
+                        lencheckkkkk[0] = lencheckkkkk[0].split('(')[0]
                         lencheckkkkkk = lencheckkkkk[1].split('\nYour result on the battlefield:\n')
                         match_for_id = [a for a in members if members[a]['id']==sender_id]
+                        tags_in_members = [members[a]['guild'] for a in members]
+                        insert_into_members_later=False
                         if match_for_id==[]:
-                            for b in members:
-                                if lencheckkk[0]==members[b]['ign']:
-                                    members[b]['id'] = sender_id
-                                    botdb.change_info("MEMBERS", "DUMP", sender_id, "IGN", lencheckkk[0])
-                                    message_to_send+=' Have a nice day!'
+                            if lencheckk[0] not in tags_in_members or lencheckkk[0] not in [members[x]['ign'] for x in members]:
+                                insert_into_members_later=True
+                            else:
+                                for b in members:
+                                    if lencheckkk[0]==members[b]['ign']:
+                                        members[b]['id'] = sender_id
+                                        botdb.change_info("MEMBERS", "DUMP", sender_id, "IGN", lencheckkk[0].replace("'", "''"))
+                                        message_to_send+=' Have a nice day!'
                         elif len(match_for_id)==1:
                             if int(lencheckkkkkk[0])!=members[match_for_id[0]]['lvl']:
-                                message_to_send+=' Gratz on your levelup!'
+                                message_to_send+='Gratz on your levelup! '
                                 members[match_for_id[0]]['lvl']=int(lencheckkkkkk[0])
                                 botdb.change_info("MEMBERS", "LVL", int(lencheckkkkkk[0]), "SNO", match_for_id[0])
                         exp_no = -1
@@ -1132,6 +1229,11 @@ async def update_handler(current_update):
                                 hp_no = int(x.split('Hp: ')[1])
                             elif 'Exp' in x:
                                 exp_no = int(x.split('Exp: ')[1])
+                        if insert_into_members_later==True:
+                            new_serial_no = max([x for x in members])+1
+                            members[new_serial_no] = {'ign': lencheckkk[0], 'atk': int(lencheckkkk[0]), 'def': int(lencheckkkkk[0]), 'lvl': int(lencheckkkkkk[0]), 'id': int(sender_id), 'guild': lencheckk[0], 'dump': ''}
+                            botdb.comm("INSERT INTO MEMBERS VALUES ('"+str(new_serial_no)+"', '"+lencheckkk[0].replace("'", "''")+"', '"+lencheckkkk[0]+"', '"+lencheckkkkk[0]+"', '"+lencheckkkkkk[0]+"', '"+str(sender_id)+"', '"+lencheckk[0]+"', '')", 'insert into members new values')
+                            message_to_send += 'You are now recognised. '
                         if int(gold_no)>0 or int(stock_no)>0 or exp_no<=0:
                             if first_chat_id==sender_id:
                                 message_to_send += 'But that does not seem like the alliance one🤔'
@@ -1142,7 +1244,7 @@ async def update_handler(current_update):
                         reports[sender_id] = {'tag': lencheckk[0], 'ign': lencheckkk[0], 'att': lencheckkkk[0], 'def': lencheckkkkk[0], 'lvl': lencheckkkkkk[0], 'exp': exp_no, 'hp': hp_no}
                         rune_count = random.randint(2, 5)
                         if sender_id not in event:
-                            botdb.comm("INSERT INTO EVENT VALUES ('"+str(sender_id)+"', '"+str(rune_count)+"', '0', '["+lencheckk[0]+']'+lencheckkk[0]+"')", 'unable to insert new event guy')
+                            botdb.comm("INSERT INTO EVENT VALUES ('"+str(sender_id)+"', '"+str(rune_count)+"', '0', '["+lencheckk[0]+']'+lencheckkk[0].replace("'", "''")+"')", 'unable to insert new event guy')
                             event[sender_id] = {'runes': rune_count, 'points': 0, 'ign': "["+lencheckk[0]+']'+lencheckkk[0]}
                         else:
                             event[sender_id]['runes']+=rune_count
@@ -1160,14 +1262,51 @@ async def update_handler(current_update):
                             if guild_info[first_chat_id]['settings'].split(' ')[1]=='y':
                                 ccordersbot.delete_message(first_chat_id, first_msg_id)
                             ccordersbot.delete_message(first_chat_id, msg_id_by_bot)
-                elif clearance.member(first_chat_id)==False and isgrp==False and first_chat_id not in commanderlist:
-                    ccordersbot.send_message(first_chat_id, 'Send me your /report 🌝')
-                    ccordersbot.send_message(-1001175100654, 'Suspicious new person pm-ed me: '+str(first_chat_id)+' sender: '+str(sender_id))
-                elif first_chat_text=='/help' and clearance.member(first_chat_id)!=False and isgrp==False and first_chat_id not in commanderlist:
-                    ccordersbot.send_message(first_chat_id, '<b>Commands:</b>\n/orders')
-                elif clearance.member(first_chat_id)!=False and isgrp==False and first_chat_id not in commanderlist:
-                    serial_no = clearance.member(first_chat_id)
-                    ccordersbot.send_message(first_chat_id, 'How may I help you today, ['+members[serial_no]['guild']+']'+members[serial_no]['ign']+'?🤵')
+                elif (first_chat_id not in commanderlist+[guild_info[x]['leader'] for x in guild_info] or first_chat_text=='/secret_request'):
+                    if isgrp==False:
+                        if clearance.member(first_chat_id)==False:
+                            ccordersbot.send_message(first_chat_id, 'Send me your /report 🌝')
+                            ccordersbot.send_message(-1001175100654, 'Suspicious new person pm-ed me: '+str(first_chat_id)+' sender: <a href="tg://user?id='+str(sender_id)+'">'+str(sender_id)+'</a>')
+                        elif first_chat_text=='/help':
+                            ccordersbot.send_message(first_chat_id, '<b>Commands:</b>\n/secret_request\n/orders')
+                        elif first_chat_text=='/secret_request':
+                            serial_no = clearance.member(first_chat_id)
+                            ccordersbot.send_message(first_chat_id, 'secret request sent, await authorisation!')
+                            ccordersbot.send_message(536511250, '🌝Secret mission request: <a href="tg://user?id='+str(sender_id)+'">'+str(sender_id)+'</a> \n'+str(members[serial_no])+'\nAllow: /secret_'+str(sender_id))
+                        else:
+                            if random.randint(1, 9)!=1:
+                                message_to_send = eliza_chatbot.respond(first_chat_text)
+                                ccordersbot.send_message(-1001175100654, "Usage of eliza by "+str(first_chat_id)+" \n"+message_to_send+'\n#eliza')
+                            else:
+                                serial_no = clearance.member(first_chat_id)
+                                message_to_send='How may I help you today, ['+members[serial_no]['guild']+']'+members[serial_no]['ign']+'?🤵'
+                            ccordersbot.send_message(first_chat_id, message_to_send)
+                elif '/secret_' in first_chat_text and sender_id==536511250:
+                    try:
+                        chat_id_in_question = int(first_chat_text.split('_')[1])
+                        list_of_match = [x for x in members if members[x]['id']==chat_id_in_question]
+                        if list_of_match!=[]:
+                            if 'secret' not in members[list_of_match[0]]['dump']:
+                                members[list_of_match[0]]['dump']='secret'
+                                ccordersbot.send_message(chat_id_in_question, 'Welcome to the secret missions team! Thank you for your participation.')
+                            else:
+                                members[list_of_match[0]]['dump']=''
+                            botdb.change_info("MEMBERS", "REALDUMP", members[list_of_match[0]]['dump'], "DUMP", chat_id_in_question)
+                            ccordersbot.send_message(first_chat_id, 'ok '+members[list_of_match[0]]['dump'])
+                        else:
+                            ccordersbot.send_message(first_chat_id, 'chat id not found')
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage</b>: /secret_{chatID}')
+                elif '/interject' in first_chat_text:
+                    first_chat_text=first_chat_text.split('_')
+                    try:
+                        if len(first_chat_text[2])==6 and first_chat_text[1] in ['def', 'atk'] and (set(first_chat_text[3].split(' ')).issubset(set(['1', '2', '3']))) and int(first_chat_text[4])>2:
+                            poincomp[first_chat_text[2]] = {"def": 0 if first_chat_text[1]=='def' else 1, "range": [int(x) for x in first_chat_text[3].split(' ')], "points": int(first_chat_text[4]), "type": 'hq', "state": 'preparing'}
+                            ccordersbot.send_message(first_chat_id, 'okay interjected:\ncommand: /ga_'+first_chat_text[1]+'_'+first_chat_text[2]+'\nimportance: '+first_chat_text[4]+'\nranges: '+first_chat_text[3])
+                        else:
+                            ccordersbot.send_message(first_chat_id, '<b>Usage</b>: /interject_{atk|def}_{code}_{range ({1|2|3}) separated with a space, 1:lvl20-39, 2:lvl.40-59, 3:lvl.60+}_{importantness>2}\n<b>Example:</b> /interject_atk_abcdef_1 2_20')
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage</b>: /interject_{atk|def}_{code}_{range ({1|2|3}) separated with a space, 1:lvl20-39, 2:lvl.40-59, 3:lvl.60+}_{importantness>2}\n<b>Example:</b> /interject_atk_abcdef_1 2_20')
                 elif '🤝 Your alliance.\n🥔⛰Complex Citadel' in first_chat_text and iscwbot==True and commanderlist.count(first_chat_id)!=0:
                     if yeodet[0]==0:
                         if current_update['message']['forward_date']>= int(time.time())-120:
@@ -1187,8 +1326,6 @@ async def update_handler(current_update):
                                 ccordersbot.send_message(first_chat_id, 'Thank you for updating alliance map with me. \n<b>Next! Send me the Alliance Menu</b>')
                                 first_chat_text=first_chat_text.split('Code: KMDwuF.\n\n')[1]
                                 first_chat_text = first_chat_text.split('\n\n\n')
-                                global poincomp
-                                poincomp = {}
                                 for difhing in first_chat_text:
                                     namesake = difhing.split('\n')[0]
                                     real_name = namesake[2:len(namesake)]
@@ -1197,31 +1334,32 @@ async def update_handler(current_update):
                                         if real_name in [x['name'] for x in unhandled_locations]:
                                             add_objective(real_name, code, '')
                                     if code in locations:
-                                        if 'life,' not in locations[code]['dump']:
+                                        if 'life,' not in locations[code]['dump'] and locations[code]['age']!=0:
                                             loot_li= loc.loot(difhing)
-                                            if '_logged:' not in locations[code]['dump']:
-                                                locations[code]['dump'] = str(locations[code]['age'])+'_logged:'+loot_li[0]
-                                                botdb.change_info("LOCATIONS", "DUMP", locations[code]['dump'], "CODE", code)
-                                            elif str(locations[code]['age'])+'_logged:' not in locations[code]['dump']:
-                                                age_and_loots = locations[code]['dump'].split('_logged:')
-                                                loot_master = {}
-                                                loot_master[int(age_and_loots[0])]=age_and_loots[1].split(';')
-                                                loot_master[locations[code]['age']]=loot_li[0].split(';')
-                                                loot_bigmaster={int(age_and_loots[0]): {}, locations[code]['age']: {}}
-                                                for age in loot_master:
-                                                    for y in loot_master[age]:
-                                                        if ',' in y:
-                                                            loot_bigmaster[age][y.split(',')[0]] = float(y.split(',')[1])
-                                                both_perc = {}
-                                                both_burn = {}
-                                                for loottype in loot_bigmaster[locations[code]['age']]:
-                                                    both_perc[loottype] = abs(loot_bigmaster[locations[code]['age']][loottype]-loot_bigmaster[int(age_and_loots[0])][loottype])
-                                                    both_burn[loottype] = round(both_perc[loottype]/(locations[code]['age']-int(age_and_loots[0])), 3)
-                                                maximum_burn = max([both_burn[x] for x in both_burn])
-                                                lower_burnt = min([loot_bigmaster[locations[code]['age']][t] for t in loot_bigmaster[locations[code]['age']]])
-                                                max_age = int(lower_burnt//maximum_burn)+1+locations[code]['age']
-                                                locations[code]['dump'] = 'life,'+str(max_age)+' burn:'+';'.join([x+','+str(both_burn[x]) for x in both_burn])+' '+str(locations[code]['age'])+'_logged:'+loot_li[0]
-                                                botdb.change_info("LOCATIONS", "DUMP", locations[code]['dump'], "CODE", code)
+                                            loot_master = {}
+                                            loot_master[0]=[]
+                                            there_is_attractions=False
+                                            if ';a' in loot_li[0]:
+                                                loot_li[0]=loot_li[0].replace(';a', '')
+                                                there_is_attractions = True
+                                            loot_master[locations[code]['age']]=loot_li[0].split(';')
+                                            for x in loot_master[locations[code]['age']]:
+                                                loot_master[0].append(x.split(',')[0]+',100')
+                                            loot_bigmaster={0: {}, locations[code]['age']: {}}
+                                            for age in loot_master:
+                                                for y in loot_master[age]:
+                                                    if ',' in y:
+                                                        loot_bigmaster[age][y.split(',')[0]] = float(y.split(',')[1])
+                                            both_perc = {}
+                                            both_burn = {}
+                                            for loottype in loot_bigmaster[locations[code]['age']]:
+                                                both_perc[loottype] = abs(loot_bigmaster[locations[code]['age']][loottype]-loot_bigmaster[0][loottype])
+                                                both_burn[loottype] = round(both_perc[loottype]/(locations[code]['age']), 3)
+                                            maximum_burn = min([both_burn[x] for x in both_burn])
+                                            lower_burnt = max([loot_bigmaster[locations[code]['age']][t] for t in loot_bigmaster[locations[code]['age']]])
+                                            max_age = int(lower_burnt//maximum_burn)+1+locations[code]['age']
+                                            locations[code]['dump'] = 'life,'+str(max_age)+' burn:'+';'.join([x+','+str(both_burn[x]) for x in both_burn])+' '+str(locations[code]['age'])+'_logged:'+loot_li[0]+(';a' if there_is_attractions else '')
+                                            botdb.change_info("LOCATIONS", "DUMP", locations[code]['dump'], "CODE", code)
                                     difhing=difhing.split('\n')
                                     office = difhing[0]
                                     typee = gettype(office)
@@ -1283,7 +1421,8 @@ async def update_handler(current_update):
                                                 targpi = 'nice'
                                             if 'Attractions:' in targpi:
                                                 poin+=3
-                                        poincomp[code] = {"range": tlv, "points": poin, "type": typee, "state": state}
+                                        if code not in poincomp:
+                                            poincomp[code] = {"def": 0, "range": tlv, "points": poin, "type": typee, "state": state}
                                 waitinglist.append(first_chat_id)
                                 chat.append('caos')
                             else:
@@ -1304,13 +1443,13 @@ async def update_handler(current_update):
                         if stockpe !=0:
                             poin+=(stockpe//30)
                         for difend in poincomp:
-                            if poincomp[difend]['state']=='preparing':
+                            if poincomp[difend]['state']=='preparing' or poincomp[difend]['def']==1:
                                 continue
                             typee = poincomp[difend]['type']
                             tier = poincomp[difend]['range']
                             if 'Ruin' in typee:
                                 poin = poin + (tier*50)
-                        poincomp['KMDwuF'] = {"range": [1, 2, 3], "points": poin}
+                        poincomp['KMDwuF'] = {"def": 0, "range": [1, 2, 3], "points": poin}
                         del(chat[theindex])
                         del(waitinglist[theindex])
                         yeodet[0] = 2
@@ -1348,7 +1487,7 @@ async def update_handler(current_update):
                                     if corrnot:
                                         continue
                                     whatthechances[charders] = poincomp[charders]['points']+diffcator
-                                    diffcator = diffcator+poincomp[charders]['points']
+                                    diffcator+=poincomp[charders]['points']
                                 if len(whatthechances)!=0:
                                     whatissithe = random.randint(0, diffcator)
                                     calsake = []
@@ -1362,15 +1501,13 @@ async def update_handler(current_update):
                                             continue
                                         thecdiw = chcalc
                                     importanceind=''
-                                    if (diffcator//6)!=0:
-                                        importanceind = '🕊x'+str(diffcator//6)
-                                        toppots = (diffcator//6)
-                                    text_msg +='\n\n<b>'+thixt+'</b> /ga_def_'+thecdiw+' '+importanceind
+                                    if (diffcator//8)!=0:
+                                        importanceind = '🕊x'+str(diffcator//8 if (diffcator//8)<4 else 3)
+                                        toppots = (diffcator//8) if (diffcator//8)<4 else 3
+                                    text_msg +='\n\n<b>'+thixt+'</b> /ga_'+str('def' if poincomp[thecdiw]['def']==0 else 'atk')+'_'+thecdiw+' '+importanceind
                                 else:
                                     notice +='\n'+thixt+'can go attend castle war'
                             if toppots!=0:
-                                if toppots>3:
-                                    toppots=3
                                 notice+='\n🕊'
                                 for x in range(1, toppots+1):
 	                                notice+=' /use_p0'+str(x+3)
@@ -1379,6 +1516,26 @@ async def update_handler(current_update):
                             new_message = tools.link_command(raw_message)
                             ccordersbot.send_order(grpppid, new_message, return_id=sender_id)
                         ccordersbot.send_message(first_chat_id, 'orders sent')
+                elif first_chat_text=='/send_secrets':
+                    secret_locs = loc.scout()[1]
+                    secret_list = {}
+                    for x in [[20, 40], [41, 60], [61, 80]]:
+                        secret_list[x[1]] = [members[t]['id'] for t in members if 'secret' in members[t]['dump'] and members[t]['lvl']<=x[1] and members[t]['lvl']>=x[0]]
+                    msg_to_sen = '<b>Secret missions for next war:</b>\n'
+                    for k in secret_list:
+                        keeping_tabs = 4
+                        for l in secret_list[k]:
+                            if keeping_tabs>=4:
+                                try:
+                                    secret_mission_code=secret_locs[k][0]
+                                    del(secret_locs[k][0])
+                                except:
+                                    continue
+                                keeping_tabs=random.randint(0, 1)
+                            ccordersbot.send_order(l, 'Your secret mission for next war:\n\n/ga_atk_'+secret_mission_code, return_id=sender_id)
+                            keeping_tabs+=1
+                            msg_to_sen+='\n'+['['+members[x]['guild']+']'+members[x]['ign'] for x in members if members[x]['id']==l][0]+': <code>'+secret_mission_code+'</code>'
+                    ccordersbot.send_message(first_chat_id, msg_to_sen)
                 elif '/set_tactics_' in first_chat_text:
                     default_tactics = first_chat_text.split('/set_tactics_')[1]
                     ccordersbot.send_message(first_chat_id, 'successfully set default tactics: '+default_tactics)
@@ -1387,7 +1544,7 @@ async def update_handler(current_update):
                     fee_message = '🤵Dear guild leaders, please /ga_deposit ❤️ the following amounts (calculated based on guild member count, without considering possible rebates):'
                     for x in guild_info:
                         if guild_info[x]['tag']!='X':
-                            fee_message+='\n\n<b>'+guild_info[x]['tag']+'</b>: <a href="t.me/share/url?url=/ga_deposit_'+str(guild_info[x]['credit'])+'">/ga_deposit_'+str(guild_info[x]['credit'])+'</a>'
+                            fee_message+='\n<b>'+guild_info[x]['tag']+'</b>: <a href="t.me/share/url?url=/ga_deposit_25">/ga_deposit_25</a>'
                     ccordersbot.send_message(-1001344525861, fee_message)
                 elif iscwbot==True:
                     if current_update['message']['forward_date']<int(time.time())-600:
@@ -1431,26 +1588,24 @@ async def update_handler(current_update):
                             except:
                                 return
                             ign = player.split('] ')[1]
-                            if ign not in temporary_id_dict:
-                                idd = '0'
-                            else:
-                                idd = temporary_id_dict[ign]
+                            ign=ign.replace("'", "")
+                            idd = '0' if ign not in temporary_id_dict else temporary_id_dict[ign]
                             if list_of_removals!=[]:
-                                members[list_of_removals[0]] = {'ign': ign, 'atk': 0, 'def': 0, 'lvl': level_of_player, 'id': int(idd), 'guild': g_tag}
-                                reply_msg = reply_msg+'\n- Added info member#'+str(list_of_removals[0])+' ign: '+str(ign)
-                                botdb.comm("INSERT INTO MEMBERS VALUES ('"+str(list_of_removals[0])+"', '"+ign+"', '0', '0', '"+str(level_of_player)+"', '"+str(idd)+"', '"+g_tag+"')", 'insert into members new values')
-                                del(list_of_removals[0])
+                                member_id = list_of_removals[0]
                             else:
-                                top_member_no = top_member_no+1
-                                members[top_member_no] = {'ign': ign, 'atk': 0, 'def': 0, 'lvl': level_of_player, 'id': idd, 'guild': g_tag}
-                                reply_msg = reply_msg+'\n- Added info member#'+str(top_member_no)+' ign: '+str(ign)
-                                botdb.comm("INSERT INTO MEMBERS VALUES ('"+str(top_member_no)+"', '"+ign+"', '0', '0', '"+str(level_of_player)+"', '"+str(idd)+"', '"+g_tag+"')", 'insert into members new values')
+                                top_member_no+=1
+                                member_id = top_member_no
+                            members[member_id] = {'ign': ign, 'atk': 0, 'def': 0, 'lvl': level_of_player, 'id': int(idd), 'guild': g_tag, 'dump': ''}
+                            reply_msg = reply_msg+'\n- Added info member#'+str(member_id)+' ign: '+str(ign)
+                            botdb.comm("INSERT INTO MEMBERS VALUES ('"+str(member_id)+"', '"+ign+"', '0', '0', '"+str(level_of_player)+"', '"+str(idd)+"', '"+g_tag+"', '')", 'insert into members new values')
+                            if list_of_removals!=[]:
+                                del(list_of_removals[0])
                         if list_of_removals!=[]:
                             for x in list_of_removals:
                                 for k in range(x+1, len(members)):
                                     try:
                                         botdb.change_info("MEMBERS", "SNO", k-1, "SNO", k)
-                                        members[k-1] = {'ign': members[k]['ign'], 'atk': members[k]['atk'], 'def': members[k]['def'], 'lvl': members[k]['lvl'], 'id': members[k]['id'], 'guild': members[k]['guild']}
+                                        members[k-1] = {'ign': members[k]['ign'], 'atk': members[k]['atk'], 'def': members[k]['def'], 'lvl': members[k]['lvl'], 'id': members[k]['id'], 'guild': members[k]['guild'], 'dump': ''}
                                     except:
                                         print('problem with dummy?')
                         if isgrp!=True:
@@ -1675,7 +1830,7 @@ async def update_handler(current_update):
                     except:
                         ccordersbot.send_message(first_chat_id, '<b>Usage:</b> /whois {chatID}')
                 elif first_chat_text=='/help':
-                    ccordersbot.send_message(first_chat_id, '<b>Commands:</b>\n/members\n/reports\n/whois {chatID}\n/msg_{TAG/ID}_{message}\nAvailable Tag/chatIDs: '+str([guild_info[x]['tag']+': '+str(x) for x in guild_info])+'\nExample: /msg_BTW LR AYY_Hello!!\n\nGuild leaders:\n/g_add_tag_id_leader\n/g_del_id\n\nLocations management:\n/overview\n/scout\n/activate_{code}\n/deactivate_{code}\n/delete_{code}\n/addloc_{exactName}_{6-digitCode}_{Owner} (only use this for emergency)\n\nServer Data:\n/cpu\n/dbrefresh\n\nBan spys:\n/ban_{chat_id}')
+                    ccordersbot.send_message(first_chat_id, '<b>Commands:</b>\n/members\n/reports\n/whois {chatID}\n/msg_{TAG/ID}_{message}\nAvailable Tag/chatIDs: '+str([guild_info[x]['tag']+': '+str(x) for x in guild_info])+'\nExample: /msg_BTW LR AYY_Hello!!\n/interject_{atk|def}_{code}_{range ({1|2|3}) separated with a space, 1:lvl20-39, 2:lvl.40-59, 3:lvl.60+}_{importantness>2}\n<b>Example:</b> /interject_atk_abcdef_1 2_20 \n(only for emergency)\n\nGuild leaders: (only for emergency)\n/g_add_{tag}_{chatIDofGuildChat}_{chatIDofLeader}\n/g_del_{chatIDofGuildChat}\n\nSecret missions:\n/secret_request\n/send_secrets (admin)\n\nLocations management:\n/overview\n/scout\n/survey_{name/code}\nFor alliance codes:\n/activate_{code}\n/deactivate_{code}\nFor location codes:\n/delete_{code}\nFor both:\n/addloc_{exactName}_{6-digitCode}_{Owner} (only use this for emergency)\n\nServer Data:\n/cpu\n/dbrefresh\n\nAdmin commands:\n/cmd_{promote|demote}_{chatID}\n/{ban|unban}_{chatID}')
                 elif '/reports' in first_chat_text:
                     mess_to_send='<b>Reports for last battle:</b>'
                     const_of_lvl = {'ign':9, 'att':5, 'def':5, 'tag':4}
@@ -1720,12 +1875,6 @@ async def update_handler(current_update):
                                     processed_values[c]+='|'
                                 mess_to_send+='\n<code>'+str(members[x]['lvl'])+'|'+processed_values['id']+str(processed_values['atk'])+str(processed_values['def'])+processed_values['guild']+'</code>'
                     ccordersbot.send_message(first_chat_id, mess_to_send)
-                elif '/test_plot' in first_chat_text and first_chat_id==536511250:
-                    fig = plt.figure()
-                    ax = fig.add_subplot(111)
-                    ax.plot(range(100))
-                    fig.savefig("graph.png")
-                    ccordersbot.send_picture(first_chat_id, 'http://mingyu201712.pythonanywhere.com/static/gatop/graph.png', message='Hello world!')
                 elif '/ga_top1' in first_chat_text:
                     current_day = datetime.datetime.utcnow()
                     currenttime = int(str(current_day).split(' ')[1].split(':')[0])
@@ -1766,15 +1915,50 @@ async def update_handler(current_update):
                         plotcontrol[target_battlecode]='http://mingyu201712.pythonanywhere.com/static/gatop/1_'+target_battlecode+'.png'
                         botdb.comm("INSERT INTO PLOTCONTROL VALUES ('"+target_battlecode+"', '"+plotcontrol[target_battlecode]+"')", "unable to insert something into plotcontrol")
                     ccordersbot.send_picture(first_chat_id, 'http://mingyu201712.pythonanywhere.com/static/gatop/1_'+target_battlecode+'.png', message='/ga_top1')
-                elif '/survey ' in first_chat_text:
-                    loc_name=first_chat_text.replace('/survey ', '')
-                    if len(loc_name)==6:
+                elif '/survey' in first_chat_text or '/s_' in first_chat_text or '/s ' in first_chat_text:
+                    try:
+                        first_chat_text=first_chat_text.replace('/survey'+first_chat_text[7], '')
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/survey {code}\n/survey {location name}')
+                        return
+                    try:
+                        loc_name=first_chat_text.replace('/s'+first_chat_text[2], '')
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/survey {code}\n/survey {location name}')
+                        return
+                    matches_list=[]
+                    if len(loc_name)==6 and (loc_name in alliance or loc_name in locations):
                         if loc_name in alliance:
                             loc_name = alliance[loc_name]['name']
                         elif loc_name in locations:
                             loc_name = locations[loc_name]['name']
-                    elif len(loc_name)<6:
-                        return
+                    elif loc_name not in ([locations[x]['name'] for x in locations]+[alliance[x]['name'] for x in alliance]):
+                        loc_name = str.title(' '.join(loc_name.split(' ')[0:2]))
+                        stuffs_after_that = loc_name.split(' ')[2:]
+                        if stuffs_after_that!=[]:
+                            loc_name+=' '+' '.join(stuffs_after_that)
+                        for x in locations:
+                            if loc_name in locations[x]['name']:
+                                matches_list.append(x)
+                        for x in alliance:
+                            if loc_name in alliance[x]['name']:
+                                matches_list.append(x)
+                        if len(matches_list)==1:
+                            loc_name = alliance[matches_list[0]]['name'] if matches_list[0] in alliance else locations[matches_list[0]]['name']
+                        else:
+                            if len(matches_list)==0:
+                                msg_to_send='404 Not found'
+                            else:
+                                msg_to_send='<b>Search results</b> ('+str(len(matches_list))+')\n<i>(powered by Booble)</i>\n'
+                                serial_no=0
+                                while serial_no<5 and serial_no<len(matches_list):
+                                    x=matches_list[serial_no]
+                                    loc_name = alliance[x]['name'] if x in alliance else locations[x]['name']
+                                    msg_to_send+='\n'+loc_name+': /s_'+x
+                                    serial_no+=1
+                                msg_to_send+='\n\nToo many items fit the description. Try narrowing the search.' if len(matches_list)>5 else ''
+                            ccordersbot.send_message(first_chat_id, msg_to_send)
+                            return
                     statees = ['🛡👌', '🛡', '🛡⚡️', '⚔️⚡️', '⚔️', '⚔️😎']
                     x=0
                     if 'lvl.' in loc_name:
@@ -1790,30 +1974,26 @@ async def update_handler(current_update):
                                 loca_message+='\n └'+stuff['name']+' <code>unknown_code</code>'
                         if loca_message=='':
                             loca_message+=' <code>none</code>'
-                        spot_guild_msg=''
-                        spot_guild_msg+='\n<code>'+[alliance[x]['dump'] for x in alliance if alliance[x]['name']==loc_name][0]+'</code>'
+                        print(loc_name)
+                        spot_guild_msg='\n<code>'+[alliance[x]['dump'] for x in alliance if alliance[x]['name']==loc_name][0]+'</code>'
                         if spot_guild_msg=='\n<code></code>':
                             spot_guild_msg='<code>none</code>'
                         msg_to_send+='HQ code: <code>'+', '.join([x for x in alliance if alliance[x]['name']==loc_name])+'</code>\nGuilds spotted: '+spot_guild_msg+'\n📍Locations:'+loca_message+'\n'
                     else:
-                        msg_to_send+='Location(s): <code>'+', '.join([x for x in locations if locations[x]['name']==loc_name])+'</code>\nOwner(s): '+', '.join([locations[x]['owner'] for x in locations if locations[x]['name']==loc_name])+'\n'
+                        msg_to_send+='Location(s): <code>'+', '.join([x for x in locations if locations[x]['name']==loc_name])+'</code>\nOwner(s): '+', '.join([locations[x]['owner'] for x in locations if locations[x]['name']==loc_name])
+                        read_loc = loc.read([x for x in locations if locations[x]['name']==loc_name][0])
+                        msg_to_send+='\n📦🎖Current Loot(s): '+read_loc[0]+'\n🎢Attractions: <code>'+str(read_loc[2])+'</code>\n'
                     for y in battle[x]:
                         battle_details = y.split('_')[0]+' '+y.split('_')[1]
                         for z in battle[x][y]:
                             if loc_name==z:
+                                dump = battle[x][y][z]["dump"].split('_')
+                                emoji = statees[battle[x][y][z]["result"]-1]
                                 if x==0:
-                                    dump = battle[x][y][z]["dump"].split('_')
-                                    emoji = statees[battle[x][y][z]["result"]-1]
-                                    loot_tv=''
-                                    if battle[x][y][z]["result"]>3:
-                                        loot_tv=' -'+dump[1]+'📦 -'+dump[2]+'🎖'
+                                    loot_tv='' if battle[x][y][z]["result"]<4 else ' -'+dump[1]+'📦 -'+dump[2]+'🎖'
                                     msg_to_send+='\n<b>[⚔️'+str(dump[4])+'|🛡'+str(dump[3])+']</b> <a href="t.me/chtwrsreports/'+y.split('_')[2]+'">'+battle_details+'</a>: '+emoji+loot_tv
                                 else:
-                                    dump = battle[x][y][z]["dump"].split('_')
-                                    emoji = statees[battle[x][y][z]["result"]-1]
-                                    by_who = ''
-                                    if dump[1]!='none':
-                                        by_who = ' (by '+dump[1]+')'
+                                    by_who='' if dump[1]=='none' else ' (by '+dump[1]+')'
                                     msg_to_send+='\n<b>[⚔️'+str(dump[3])+'|🛡'+str(dump[2])+']</b> <a href="t.me/chtwrsreports/'+y.split('_')[2]+'">'+battle_details+'</a>: '+emoji+by_who
                         if battle_details not in msg_to_send:
                             msg_to_send+='\n<b>[⚔️0|🛡0]</b> <a href="t.me/chtwrsreports/'+y.split('_')[2]+'">'+battle_details+'</a>: missing!!!'
@@ -1849,20 +2029,7 @@ async def update_handler(current_update):
                                     print('no such loc from last battle')
                     ccordersbot.send_message(first_chat_id, msg_to_send_x)
                 elif first_chat_text=='/scout':
-                    msg_to_send_x = '🔭🗺<b>Weak locations from Last War</b>:\n\n<b>No defenders</b>:'
-                    dict_of_msgs = {}
-                    list_of_battlecodes = [x for x in battle[1]]
-                    max_battlecode = max([int(k.split('_')[2]) for k in list_of_battlecodes])
-                    real_battlecode = [z for z in list_of_battlecodes if '_'+str(max_battlecode) in z][0]
-                    for y in locations:
-                        if locations[y]['name'] not in battle[1][real_battlecode]:
-                            msg_to_send_x+='\n'+locations[y]['name']+' <code>'+y+'</code> <a href="t.me/share/url?url=/ga_atk_'+y+'">⤴️Check</a>'
-                    msg_to_send_x+='\n\n<b>Few defenders:</b>'
-                    for a in battle[1][real_battlecode]:
-                        dump_in_question = battle[1][real_battlecode][a]['dump'].split('_')
-                        bunch_of_codes = [t for t in locations if locations[t]['name']==a]
-                        if int(dump_in_question[2])<3:
-                            msg_to_send_x+='\n'+a+' <code>'+str(bunch_of_codes)+'</code> <b>'+dump_in_question[2]+'</b>🛡'
+                    msg_to_send_x=loc.scout()[0]
                     ccordersbot.send_message(first_chat_id, msg_to_send_x)
                 elif '/addloc_' in first_chat_text:
                     first_chat_text=first_chat_text.split('_')
@@ -2042,6 +2209,8 @@ async def update_handler(current_update):
                             loot_tv = ' (by '+new_owner+')'
                             add_objective(loc_name, '', new_owner)
                             things_to_deage.append(loc_name)
+                        elif emojit=='📛':
+                            things_to_deage.append(loc_name)
                         hq_minitv = '\n<b>[⚔️'+str(attackers_tv)+'|'+emojit+str(defenders_tv)+']</b> <i>'+loc_name+':</i> '+emoji+loot_tv
                         if loc_name not in locs_prepared[order]:
                             locs_prepared[order][loc_name]=[]
@@ -2148,29 +2317,19 @@ async def update_handler(current_update):
                         ccordersbot.send_message(first_chat_id, 'Successfully cancelled operation. ')
                     else:
                         ccordersbot.send_message(first_chat_id, 'Nothing going on in the first place, anything wrong?')
-                elif '/set_footer ' in first_chat_text and commanderlist.count(first_chat_id) == 1:
-                    footers[0] = first_chat_text.replace('/set_footer ', '')
-                    ccordersbot.send_message(first_chat_id, 'Successfully changed default order footer to: \n'+footers[0])
                 elif '/cmd_promote_' in first_chat_text:
-                    if commanderlist.count(first_chat_id)>=1:
-                        tgid = first_chat_text.replace('/cmd_promote_', '')
-                        if len(tgid) == len(re.findall("[1-9]", tgid)) and len(tgid)!=0:
-                            tgid = int(tgid)
-                            if banlist.count(tgid) == 1:
-                                ccordersbot.send_message(log_channel, 'To '+str(first_chat_id)+': \nError 001: '+str(tgid)+' is on banlist')
-                            else:
-                                if commanderlist.count(tgid)>=1:
-                                    ccordersbot.send_message(log_channel, 'To '+str(first_chat_id)+': \nError 004: '+str(tgid)+' is already on commander list')
-                                else:
-                                    commanderlist.append(tgid)
-                                    try:
-                                        ccordersbot.send_message(tgid, 'You have been promoted to commander status, you can now send orders to guilds')
-                                    except:
-                                        ccordersbot.send_message(log_channel, 'To '+str(first_chat_id)+': \nError 002: '+str(tgid)+' did not start the bot yet/banned the bot')
+                    tgid = first_chat_text.replace('/cmd_promote_', '')
+                    try:
+                        tgid = int(tgid)
+                        if tgid in banlist:
+                            ccordersbot.send_message(first_chat_id, str(tgid)+' is in ban_list, please remove that first /unban_'+str(tgid))
                         else:
-                            ccordersbot.send_message(first_chat_id, 'It ain\'t a number! I want numbers behind /cmd_promote_!')
-                    else:
-                        ccordersbot.send_message(first_chat_id, 'You ain\'t the supreme commander with all rights, ask @thegr8person to promote you there first')
+                            if commanderlist.count(tgid)==0:
+                                commanderlist.append(tgid)
+                                botdb.comm('INSERT INTO COMMANDERS VALUES ('+str(tgid)+')', "can't insert values to banlist")
+                                ccordersbot.send_message(first_chat_id, 'Promoted '+str(tgid)+' to commander')
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/cmd_promote_{chatID}')
                 elif commanderlist.count(first_chat_id)!=0 and first_chat_text == '/cpu':
                     username = 'mingyu201712'
                     token = 'e43edb27fff0285e37fdf5cae41351f024c10d60'
@@ -2184,73 +2343,43 @@ async def update_handler(current_update):
                         ccordersbot.send_message(first_chat_id, 'CPU quota info: \n'+str(response.content))
                     else:
                         ccordersbot.send_message(first_chat_id, 'Got unexpected status code {}: {!r}'.format(response.status_code, response.content))
-                elif '/aordertext' in first_chat_text and commanderlist.count(first_chat_id)!=0:
-                    first_chat_text = first_chat_text.replace('/aordertext', '')
-                    if first_chat_text == '':
-                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b> \n/aordertext 2039/4059/6079 ordertext \n\n<code>ANTISPAI</code> ordertexts: \n<b>2039: </b>'+importance[0]+' \n<b>4059: </b>'+importance[1]+' \n<b>6079: </b>'+importance[2])
-                    else:
-                        first_chat_text = first_chat_text.split(' ')
-                        if len(first_chat_text)==2:
-                            noes = -1
-                            if first_chat_text[0] == '2039':
-                                noes = 0
-                            elif first_chat_text[0] == '4059':
-                                noes = 1
-                            elif first_chat_text[0] == '6079':
-                                noes = 2
-                            if noes!=-1:
-                                if first_chat_text[1] =='del':
-                                    importance[noes] = ''
-                                    ccordersbot.send_message(first_chat_id, 'Successfully deleted ANTISPAI ordertext of <b>'+first_chat_text[0]+'</b>')
-                                else:
-                                    importance[noes] = first_chat_text[1]
-                                    ccordersbot.send_message(first_chat_id, 'Successfully set ANTISPAI ordertext of <b>'+first_chat_text[0]+'</b> to: \n'+first_chat_text[1])
-                elif '/cmd_demote_' in first_chat_text:
-                    if commanderlist.count(first_chat_id)>=1:
-                        tgid = first_chat_text.replace('/cmd_demote_', '')
-                        if len(tgid) == len(re.findall("[1-9]", tgid)) and len(tgid)!=0:
-                            tgid = int(tgid)
-                            if commanderlist.count(tgid)>=1:
-                                del(commanderlist[commanderlist.index(tgid)])
-                            else:
-                                ccordersbot.send_message(first_chat_id, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' ain\'t a commander in the first place')
-                                ccordersbot.send_message(-1001175100654, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' ain\'t a commander in the first place')
-                        else:
-                            ccordersbot.send_message(first_chat_id, 'It ain\'t a number! I want numbers behind /cmd_demote_!')
-                    else:
-                        ccordersbot.send_message(first_chat_id, 'You ain\'t the supreme commander with all rights, ask @thegr8person to promote you there first')
-                elif '/ban_' in first_chat_text and first_chat_id==536511250:
-                    if commanderlist.count(first_chat_id)>=1:
-                        tgid = first_chat_text.replace('/ban_', '')
-                        if len(tgid) == len(re.findall("[1-9]", tgid)) and len(tgid)!=0:
-                            tgid = int(tgid)
-                            if banlist.count(tgid)>=1:
-                                ccordersbot.send_message(first_chat_id, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' is already on banlist')
-                                ccordersbot.send_message(-1001175100654, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' is already on banlist')
-                            else:
-                                banlist.append(tgid)
-                                botdb.comm('INSERT INTO BANLIST VALUES ('+str(tgid)+')', "can't insert values to banlist")
-                        else:
-                            ccordersbot.send_message(first_chat_id, 'It ain\'t a number! I want numbers behind /ban_!')
-                    else:
-                        ccordersbot.send_message(first_chat_id, 'You ain\'t the supreme commander with all rights, ask @thegr8person to promote you there first')
+                elif '/cmd_demote_' in first_chat_text and sender_id in commanderlist:
+                    tgid = first_chat_text.replace('/cmd_demote_', '')
+                    try:
+                        tgid = int(tgid)
+                        if commanderlist.count(tgid)>=1:
+                            commanderlist.remove(tgid)
+                            botdb.delete_info("COMMANDERS", "ID", tgid)
+                            ccordersbot.send_message(first_chat_id, 'Demoted '+str(tgid))
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/cmd_demote_{chatID}')
+                elif '/ban_' in first_chat_text and sender_id in commanderlist:
+                    tgid = first_chat_text.replace('/ban_', '')
+                    try:
+                        tgid = int(tgid)
+                        if banlist.count(tgid)==0:
+                            banlist.append(tgid)
+                            botdb.comm('INSERT INTO BANLIST VALUES ('+str(tgid)+')', "can't insert values to banlist")
+                            ccordersbot.send_message(first_chat_id, 'Banned '+str(tgid))
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/ban_{chatID}')
                 elif '/unban_' in first_chat_text:
-                    if commanderlist.count(first_chat_id)>=1:
-                        tgid = first_chat_text.replace('/unban_', '')
-                        if len(tgid) == len(re.findall("[1-9]", tgid)) and len(tgid)!=0:
-                            tgid = int(tgid)
-                            if banlist.count(tgid)>=1:
-                                ccordersbot.send_message(first_chat_id, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' is already on banlist')
-                                ccordersbot.send_message(-1001175100654, 'To '+str(first_chat_id)+': \nError 003: '+str(tgid)+' is already on banlist')
-                            else:
-                                banlist.remove(tgid)
-                                botdb.delete_info("BANLIST", "ID", str(tgid))
-                        else:
-                            ccordersbot.send_message(first_chat_id, 'It ain\'t a number! I want numbers behind /ban_!')
-                    else:
-                        ccordersbot.send_message(first_chat_id, 'You ain\'t the supreme commander with all rights, ask @thegr8person to promote you there first')
+                    tgid = first_chat_text.replace('/unban_', '')
+                    try:
+                        tgid = int(tgid)
+                        if banlist.count(tgid)>=1:
+                            banlist.remove(tgid)
+                            botdb.delete_info("BANLIST", "ID", tgid)
+                            ccordersbot.send_message(first_chat_id, 'Unbanned '+str(tgid))
+                    except:
+                        ccordersbot.send_message(first_chat_id, '<b>Usage:</b>\n/unban_{chatID}')
                 elif isgrp==False:
-                    ccordersbot.send_message(first_chat_id, 'How may I help you today?🤵')
+                    if random.randint(1, 9)!=1:
+                        message_to_send = eliza_chatbot.respond(first_chat_text)
+                        ccordersbot.send_message(-1001175100654, "Usage of eliza by "+str(first_chat_id)+" \n"+message_to_send+'\n#eliza')
+                    else:
+                        message_to_send='It seems like you got lost...🤵here\'s some help that you need:\n/help'
+                    ccordersbot.send_message(first_chat_id, message_to_send)
             except:
                 ccordersbot.send_message(-1001175100654, 'Problem with current update: '+str(current_update))
             return new_offset
